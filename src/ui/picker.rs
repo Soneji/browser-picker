@@ -35,7 +35,7 @@ pub fn show(url: String) {
         .collect();
 
     let footer = if fav_idx.is_some() {
-        "Enter = default   ·   1–9 to pick   ·   Esc".to_string()
+        "Enter / Space = default   ·   1–9 to pick   ·   Esc".to_string()
     } else {
         "1–9 to pick   ·   Esc to cancel".to_string()
     };

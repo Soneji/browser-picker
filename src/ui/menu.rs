@@ -19,7 +19,8 @@ use winapi::um::winuser::{
     GetWindowLongPtrW, InvalidateRect, LoadCursorW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TrackMouseEvent, TranslateMessage,
     UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, MSG, PAINTSTRUCT,
-    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE, VK_RETURN, WM_DESTROY,
+    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE, VK_RETURN, VK_SPACE,
+    WM_DESTROY,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
     WNDCLASSW, WS_CAPTION, WS_OVERLAPPED, WS_SYSMENU,
 };
@@ -350,7 +351,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             let vk = wparam as i32;
             if vk == VK_ESCAPE {
                 DestroyWindow(hwnd);
-            } else if vk == VK_RETURN {
+            } else if vk == VK_RETURN || vk == VK_SPACE {
                 if let Some(i) = state.menu.default {
                     state.result = Some(i);
                     DestroyWindow(hwnd);
