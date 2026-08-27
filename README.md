@@ -16,7 +16,9 @@ in native Rust, not Electron.
   de-duplicates by executable path, with no hard-coded browser list. Per-user
   installs (Chrome, Edge Beta/Dev/Canary, Brave, …) live in **HKCU**, which
   single-hive detection misses.
-- **Modern UI.** A flat, dark, rounded window (egui) — not a Windows-2000 dialog.
+- **Modern UI, no GPU.** A flat, dark, rounded window drawn directly with GDI —
+  not a Windows-2000 dialog, and it needs no graphics adapter, so it runs on RDP
+  sessions and VMs where GPU toolkits fail.
 - **Brings the browser to the front.** Grants foreground rights to the browser it
   launches, so the link opens on top instead of behind other windows.
 - **No background process.** Nothing sits in the tray. The exe only runs for the
@@ -86,16 +88,15 @@ Picker itself. Browsers are launched as `exe <url>`.
 
 ## Notes
 
-- The UI uses egui, rendered with **wgpu (DirectX 12 on Windows, with a software
-  fallback)** — chosen over OpenGL because OpenGL init fails on many RDP sessions,
-  VMs and older drivers. The binary is ~6 MB: larger than a bare Win32 app, but
-  there is still **no background process** and it's ~25× smaller than an Electron
-  equivalent. A hand-drawn Direct2D/GDI UI (no GPU, ~300 KB) is a possible future
-  path if you want the kilobytes back.
+- The UI is **drawn directly with GDI — no GPU**. No OpenGL, no DirectX, no
+  bundled runtime. This is deliberate: it works on any Windows, including Remote
+  Desktop sessions and VMs with no graphics adapter (where GPU toolkits fail with
+  "no suitable adapter found"). The binary is ~400 KB, double-buffered so it
+  doesn't flicker, and there is no background process.
 - If the app ever fails to start, it shows the exact error in a dialog and writes
-  `%TEMP%\browser-picker-crash.log` — send that along.
-- DPI is handled by the windowing layer (per-monitor aware), so the UI is crisp on
-  high-DPI displays.
+  `%TEMP%\browser-picker-crash.log`.
+- The app is DPI-unaware, so Windows scales the window to the correct physical
+  size on high-DPI displays (text may be marginally soft at very high scale).
 
 ## Roadmap
 
