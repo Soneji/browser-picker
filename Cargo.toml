@@ -14,7 +14,10 @@ path = "src/main.rs"
 #   cargo build --release --target x86_64-pc-windows-msvc   (CI / real binary)
 #   cargo check  --target x86_64-pc-windows-gnu             (local type-check on Linux)
 [target.'cfg(windows)'.dependencies]
-nwg = { package = "native-windows-gui", version = "1.0.13" }
+# Core controls (Window/Button/Label/Font/message boxes/events) are always
+# available; disabling default features drops plotters, stretch/flexbox,
+# image-decoder, rich-textbox, tray, etc. that we don't use.
+nwg = { package = "native-windows-gui", version = "1.0.13", default-features = false, features = ["listbox"] }
 winreg = "0.52"
 winapi = { version = "0.3.9", features = ["winuser"] }
 
