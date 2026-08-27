@@ -30,14 +30,18 @@ pub fn show(url: String) {
     };
 
     let app = PickerApp { url, browsers };
-    let _ = eframe::run_native(
+    if let Err(e) = eframe::run_native(
         crate::PRODUCT_NAME,
         options,
         Box::new(|cc| {
             crate::ui::apply_theme(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
-    );
+    ) {
+        crate::msg(&format!(
+            "Browser Picker couldn't open its window — the graphics renderer failed to start.\n\n{e}"
+        ));
+    }
 }
 
 impl eframe::App for PickerApp {

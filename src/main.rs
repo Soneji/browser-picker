@@ -45,6 +45,28 @@ pub fn msg(text: &str) {
     }
 }
 
+/// Turn any panic into a visible, copyable dialog + a log file, so a crash
+/// (e.g. the graphics renderer failing to start) is diagnosable, not silent.
+fn install_crash_handler() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown error".to_string());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let text =
+            format!("Browser Picker hit an error and had to close.\n\n{payload}\n\nAt: {location}");
+        let log = std::env::temp_dir().join("browser-picker-crash.log");
+        let _ = std::fs::write(&log, &text);
+        msg(&format!("{text}\n\nA copy was saved to:\n{}", log.display()));
+    }));
+}
+
 fn list_text() -> String {
     let me = std::env::current_exe().ok();
     let found = browsers::detect(me.as_deref());
@@ -59,6 +81,8 @@ fn list_text() -> String {
 }
 
 fn main() {
+    install_crash_handler();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     // First recognised flag wins; first non-flag argument is treated as the URL.
