@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Stage binary
+        shell: pwsh
+        run: Copy-Item target\release\browser-picker.exe browser-picker.exe
+
+      - name: Report size
+        shell: pwsh
+        run: Write-Host ("browser-picker.exe = {0:N0} bytes" -f (Get-Item browser-picker.exe).Length)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-picker-windows-x64
+          path: browser-picker.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: browser-picker.exe
+          generate_release_notes: true
