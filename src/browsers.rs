@@ -36,6 +36,13 @@ pub struct Browser {
     pub icon: String,
 }
 
+impl Browser {
+    /// Stable identity for settings/ordering: the lowercased executable path.
+    pub fn id(&self) -> String {
+        self.exe.to_string_lossy().to_lowercase()
+    }
+}
+
 const START_MENU: &str = r"SOFTWARE\Clients\StartMenuInternet";
 const START_MENU_WOW: &str = r"SOFTWARE\WOW6432Node\Clients\StartMenuInternet";
 

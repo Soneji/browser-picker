@@ -7,6 +7,7 @@
 //! process — the exe only runs while you're choosing, then exits.
 
 mod browsers;
+mod config;
 mod register;
 mod ui;
 

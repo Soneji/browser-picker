@@ -1,60 +1,53 @@
-//! A small, modern, GPU-free menu window drawn directly with GDI.
-//!
-//! This deliberately uses no graphics adapter (no OpenGL/DirectX), so it works
-//! on any Windows — including Remote Desktop sessions and VMs with no GPU. It is
-//! double-buffered (draw to a memory DC, then blit) so there is no flicker, and
-//! fully custom-painted for a flat dark look rather than the default Win32 chrome.
+//! The picker list window (GPU-free GDI). Shows browsers with icons; the
+//! favourite is badged and launched on Enter.
 
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
 use winapi::ctypes::c_void;
 use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, LRESULT, TRUE, UINT, WPARAM};
-use winapi::shared::windef::{HDC, HFONT, HGDIOBJ, HWND, RECT};
+use winapi::shared::windef::{HFONT, HGDIOBJ, HICON, HWND, RECT};
 use winapi::um::dwmapi::DwmSetWindowAttribute;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::wingdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen, CreateSolidBrush,
-    DeleteDC, DeleteObject, RoundRect, SelectObject, SetBkMode, SetTextColor, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE, OUT_DEFAULT_PRECIS, PS_SOLID,
-    SRCCOPY, TRANSPARENT,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, CreateSolidBrush, DeleteDC,
+    DeleteObject, RoundRect, SelectObject, SetBkMode, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use winapi::um::winuser::{
-    AdjustWindowRectEx, BeginPaint, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    DrawTextW, EndPaint, FillRect, GetClientRect, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
-    InvalidateRect, LoadCursorW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
-    SetWindowLongPtrW, ShowWindow, TrackMouseEvent, TranslateMessage, UpdateWindow, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
-    GWLP_USERDATA, IDC_ARROW, MSG, PAINTSTRUCT, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, TME_LEAVE,
-    TRACKMOUSEEVENT, VK_ESCAPE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSELEAVE,
-    WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WNDCLASSW, WS_CAPTION, WS_OVERLAPPED, WS_SYSMENU,
+    AdjustWindowRectEx, BeginPaint, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
+    DispatchMessageW, EndPaint, FillRect, GetClientRect, GetMessageW, GetSystemMetrics,
+    GetWindowLongPtrW, InvalidateRect, LoadCursorW, PostQuitMessage, RegisterClassW,
+    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TrackMouseEvent, TranslateMessage,
+    UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, MSG, PAINTSTRUCT,
+    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE, VK_RETURN, WM_DESTROY,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
+    WNDCLASSW, WS_CAPTION, WS_OVERLAPPED, WS_SYSMENU,
 };
 
-/// A COLORREF (0x00BBGGRR).
-const fn rgb(r: u8, g: u8, b: u8) -> u32 {
-    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
-}
-
-const BG: u32 = rgb(0x1b, 0x1b, 0x1b);
-const PANEL: u32 = rgb(0x2a, 0x2a, 0x2a);
-const ACCENT: u32 = rgb(0xf3, 0xa2, 0x00);
-const TEXT: u32 = rgb(0xea, 0xea, 0xea);
-const DIM: u32 = rgb(0xaa, 0xaa, 0xaa);
-const DIM2: u32 = rgb(0x80, 0x80, 0x80);
-const BLACK: u32 = rgb(0, 0, 0);
+use crate::ui::gdi::{
+    self, ACCENT, BG, BLACK, DIM, DIM2, DT_GLYPH, DT_LINE, PANEL, TEXT,
+};
 
 const PAD: i32 = 16;
 const WIDTH: i32 = 380;
-const ROW_H: i32 = 44;
+const ROW_H: i32 = 46;
 const GAP: i32 = 8;
+const ICON: i32 = 24;
 
-/// A menu to display. Items are clickable rows; info lines are dim static text.
+pub struct MenuItem {
+    pub label: String,
+    pub icon: Option<HICON>,
+    pub favorite: bool,
+}
+
 pub struct Menu {
     pub title: String,
     pub subtitle: String,
     pub info: Vec<String>,
-    pub items: Vec<String>,
+    pub items: Vec<MenuItem>,
     pub footer: String,
+    /// Index launched when the user presses Enter (the favourite/default).
+    pub default: Option<usize>,
 }
 
 struct State {
@@ -66,11 +59,17 @@ struct State {
     font_body: HFONT,
     font_dim: HFONT,
     item_rects: Vec<RECT>,
+    has_icons: bool,
 }
 
 impl Drop for State {
     fn drop(&mut self) {
         unsafe {
+            for it in &self.menu.items {
+                if let Some(ic) = it.icon {
+                    DestroyIcon(ic);
+                }
+            }
             for f in [self.font_title, self.font_body, self.font_dim] {
                 if !f.is_null() {
                     DeleteObject(f as HGDIOBJ);
@@ -80,61 +79,18 @@ impl Drop for State {
     }
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
-/// Truncate a string to `max` chars with an ellipsis.
-pub fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let t: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{t}…")
-    }
-}
-
-unsafe fn make_font(size: i32, weight: i32) -> HFONT {
-    let face = wide("Segoe UI");
-    CreateFontW(
-        -size,
-        0,
-        0,
-        0,
-        weight,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE,
-        face.as_ptr(),
-    )
-}
-
-/// Show the menu and block until the user picks an item (Some(index)) or cancels
-/// with Esc / the close button (None).
 pub fn run(menu: Menu) -> Option<usize> {
     unsafe {
         let hinstance = GetModuleHandleW(null());
-        let class_name = wide("BrowserPickerWnd");
-
+        let class_name = gdi::wide("BrowserPickerWnd");
         let mut wc: WNDCLASSW = zeroed();
         wc.style = CS_HREDRAW | CS_VREDRAW;
         wc.lpfnWndProc = Some(wnd_proc);
         wc.hInstance = hinstance;
         wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-        wc.hbrBackground = null_mut();
         wc.lpszClassName = class_name.as_ptr();
-        RegisterClassW(&wc); // fine if already registered
+        RegisterClassW(&wc);
 
-        // Layout.
         let title_h = if menu.title.is_empty() { 0 } else { 30 };
         let sub_h = if menu.subtitle.is_empty() { 0 } else { 24 };
         let info_h = if menu.info.is_empty() {
@@ -158,6 +114,7 @@ pub fn run(menu: Menu) -> Option<usize> {
                 bottom: top + ROW_H,
             });
         }
+        let has_icons = menu.items.iter().any(|it| it.icon.is_some());
 
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
         let mut rc = RECT {
@@ -177,14 +134,15 @@ pub fn run(menu: Menu) -> Option<usize> {
             hovered: None,
             result: None,
             tracking: false,
-            font_title: make_font(20, 600),
-            font_body: make_font(16, 400),
-            font_dim: make_font(13, 400),
+            font_title: gdi::make_font(20, 600),
+            font_body: gdi::make_font(16, 400),
+            font_dim: gdi::make_font(13, 400),
             item_rects,
+            has_icons,
         });
         let state_ptr = Box::into_raw(state);
 
-        let title_w = wide(crate::PRODUCT_NAME);
+        let title_w = gdi::wide(crate::PRODUCT_NAME);
         let hwnd = CreateWindowExW(
             0,
             class_name.as_ptr(),
@@ -204,7 +162,6 @@ pub fn run(menu: Menu) -> Option<usize> {
             return None;
         }
 
-        // Dark title bar (Win10 2004+/Win11); harmless no-op elsewhere.
         let dark: BOOL = TRUE;
         let _ = DwmSetWindowAttribute(
             hwnd,
@@ -237,29 +194,14 @@ fn hit_test(state: &State, x: i32, y: i32) -> Option<usize> {
     None
 }
 
-unsafe fn draw_text(hdc: HDC, font: HFONT, color: u32, text: &str, rect: &mut RECT) {
-    SelectObject(hdc, font as HGDIOBJ);
-    SetTextColor(hdc, color);
-    let w = wide(text);
-    DrawTextW(
-        hdc,
-        w.as_ptr(),
-        -1,
-        rect,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
-    );
-}
-
 unsafe fn paint(hwnd: HWND, state: &State) {
     let mut ps: PAINTSTRUCT = zeroed();
     let hdc = BeginPaint(hwnd, &mut ps);
-
     let mut rc: RECT = zeroed();
     GetClientRect(hwnd, &mut rc);
     let w = rc.right;
     let h = rc.bottom;
 
-    // Double buffer.
     let memdc = CreateCompatibleDC(hdc);
     let membmp = CreateCompatibleBitmap(hdc, w, h);
     let oldbmp = SelectObject(memdc, membmp as HGDIOBJ);
@@ -272,21 +214,23 @@ unsafe fn paint(hwnd: HWND, state: &State) {
     let mut y = PAD;
     if !state.menu.title.is_empty() {
         let mut r = line_rect(w, y, 30);
-        draw_text(memdc, state.font_title, TEXT, &state.menu.title, &mut r);
+        gdi::draw_text(memdc, state.font_title, TEXT, &state.menu.title, &mut r, DT_LINE);
         y += 30;
     }
     if !state.menu.subtitle.is_empty() {
         let mut r = line_rect(w, y, 24);
-        draw_text(memdc, state.font_dim, DIM, &state.menu.subtitle, &mut r);
+        gdi::draw_text(memdc, state.font_dim, DIM, &state.menu.subtitle, &mut r, DT_LINE);
         y += 24;
     }
     for line in &state.menu.info {
         let mut r = line_rect(w, y, 19);
-        draw_text(memdc, state.font_dim, DIM, line, &mut r);
+        gdi::draw_text(memdc, state.font_dim, DIM, line, &mut r, DT_LINE);
         y += 19;
     }
 
+    let text_left_off = if state.has_icons { 12 + ICON + 12 } else { 16 };
     for (i, r) in state.item_rects.iter().enumerate() {
+        let it = &state.menu.items[i];
         let hovered = state.hovered == Some(i);
         let fill = if hovered { ACCENT } else { PANEL };
         let brush = CreateSolidBrush(fill);
@@ -299,14 +243,28 @@ unsafe fn paint(hwnd: HWND, state: &State) {
         DeleteObject(brush as HGDIOBJ);
         DeleteObject(pen as HGDIOBJ);
 
+        if let Some(ic) = it.icon {
+            gdi::draw_icon(memdc, r.left + 12, r.top + (ROW_H - ICON) / 2, ICON, ic);
+        }
         let color = if hovered { BLACK } else { TEXT };
         let mut tr = RECT {
-            left: r.left + 16,
+            left: r.left + text_left_off,
             top: r.top,
-            right: r.right - 10,
+            right: r.right - 36,
             bottom: r.bottom,
         };
-        draw_text(memdc, state.font_body, color, &state.menu.items[i], &mut tr);
+        gdi::draw_text(memdc, state.font_body, color, &it.label, &mut tr, DT_LINE);
+
+        if it.favorite {
+            let mut sr = RECT {
+                left: r.right - 34,
+                top: r.top,
+                right: r.right - 8,
+                bottom: r.bottom,
+            };
+            let scol = if hovered { BLACK } else { ACCENT };
+            gdi::draw_text(memdc, state.font_body, scol, "★", &mut sr, DT_GLYPH);
+        }
     }
 
     if !state.menu.footer.is_empty() {
@@ -316,7 +274,7 @@ unsafe fn paint(hwnd: HWND, state: &State) {
             right: w - PAD,
             bottom: h - PAD,
         };
-        draw_text(memdc, state.font_dim, DIM2, &state.menu.footer, &mut r);
+        gdi::draw_text(memdc, state.font_dim, DIM2, &state.menu.footer, &mut r, DT_LINE);
     }
 
     BitBlt(hdc, 0, 0, w, h, memdc, 0, 0, SRCCOPY);
@@ -335,18 +293,12 @@ fn line_rect(w: i32, y: i32, h: i32) -> RECT {
     }
 }
 
-unsafe extern "system" fn wnd_proc(
-    hwnd: HWND,
-    msg: UINT,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let cs = lparam as *const CREATESTRUCTW;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*cs).lpCreateParams as isize);
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
-
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
     if ptr.is_null() {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -398,11 +350,16 @@ unsafe extern "system" fn wnd_proc(
             let vk = wparam as i32;
             if vk == VK_ESCAPE {
                 DestroyWindow(hwnd);
+            } else if vk == VK_RETURN {
+                if let Some(i) = state.menu.default {
+                    state.result = Some(i);
+                    DestroyWindow(hwnd);
+                }
             } else {
                 let idx = if (0x31..=0x39).contains(&vk) {
-                    Some((vk - 0x31) as usize) // '1'..'9'
+                    Some((vk - 0x31) as usize)
                 } else if (0x61..=0x69).contains(&vk) {
-                    Some((vk - 0x61) as usize) // numpad 1..9
+                    Some((vk - 0x61) as usize)
                 } else {
                     None
                 };

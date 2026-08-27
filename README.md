@@ -19,6 +19,9 @@ in native Rust, not Electron.
 - **Modern UI, no GPU.** A flat, dark, rounded window drawn directly with GDI —
   not a Windows-2000 dialog, and it needs no graphics adapter, so it runs on RDP
   sessions and VMs where GPU toolkits fail.
+- **Icons, custom order, and a favourite.** The picker shows each browser's icon.
+  Open the app to reorder browsers and star a favourite/default: the picker then
+  lists them in your order, badges the favourite, and opens it on Enter.
 - **Brings the browser to the front.** Grants foreground rights to the browser it
   launches, so the link opens on top instead of behind other windows.
 - **No background process.** Nothing sits in the tray. The exe only runs for the
@@ -47,14 +50,19 @@ for `HTTP` and `HTTPS`.
 
 ```
 browser-picker.exe <url>          Show the picker for a URL (what Windows calls)
-browser-picker.exe                Open the home / settings window
+browser-picker.exe                Open settings (icons, reorder, favourite)
 browser-picker.exe --register     Register as a selectable browser (no admin)
 browser-picker.exe --unregister   Remove the registration
 browser-picker.exe --list         List the browsers that were detected
 browser-picker.exe --help         Show help
 ```
 
-In the picker: click a browser, press **1 … 9**, or press **Esc** to cancel.
+In the picker: click a browser, press **1–9**, press **Enter** for your
+favourite/default, or **Esc** to cancel.
+
+Run `browser-picker.exe` with no URL for **settings**: **★** sets the
+favourite/default, **▲ ▼** reorder, and the buttons register / set-default.
+Order and favourite save instantly (to `HKCU\Software\BrowserPicker`).
 
 ## Build from source
 
@@ -100,9 +108,8 @@ Picker itself. Browsers are launched as `exe <url>`.
 
 ## Roadmap
 
-- Remember last choice / per-domain rules ("always open github.com in Firefox").
-- Optional browser icons in the picker.
-- Ultra-light custom-drawn (Direct2D) UI to shrink the binary.
+- Per-domain rules ("always open github.com in Firefox").
+- Remember the most recently used browser.
 
 ## Credits
 

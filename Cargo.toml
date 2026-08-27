@@ -1,6 +1,6 @@
 [package]
 name = "browser-picker"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "A tiny, native browser picker for Windows — choose which browser opens each link."
 license = "MIT"
@@ -17,7 +17,7 @@ path = "src/main.rs"
 # No GPU: the UI is drawn directly with GDI (double-buffered) via winapi, so it
 # works on any Windows — including RDP sessions and VMs with no graphics adapter.
 winreg = "0.52"
-winapi = { version = "0.3.9", features = ["winuser", "wingdi", "libloaderapi", "dwmapi"] }
+winapi = { version = "0.3.9", features = ["winuser", "wingdi", "libloaderapi", "dwmapi", "shellapi"] }
 
 [profile.release]
 opt-level = "z"     # optimize for size
