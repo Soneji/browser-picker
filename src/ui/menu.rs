@@ -1,32 +1,34 @@
-//! The picker list window (GPU-free GDI). Shows browsers with icons; the
-//! favourite is badged and launched on Enter.
+//! The picker: a frameless, top-most popup that appears at the mouse cursor with
+//! the favourite/default row under the pointer (so a double-click on a link opens
+//! the default). Position is clamped to the cursor's monitor work area, so a click
+//! near a screen edge slides the popup on-screen instead of overflowing. Closes on
+//! Esc or when it loses focus (click-away). GPU-free GDI.
 
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
 use winapi::ctypes::c_void;
-use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, LRESULT, TRUE, UINT, WPARAM};
-use winapi::shared::windef::{HFONT, HGDIOBJ, HICON, HWND, RECT};
-use winapi::um::dwmapi::DwmSetWindowAttribute;
+use winapi::shared::minwindef::{FALSE, LPARAM, LRESULT, UINT, WPARAM};
+use winapi::shared::windef::{HFONT, HGDIOBJ, HICON, HWND, POINT, RECT};
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::wingdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, CreateSolidBrush, DeleteDC,
     DeleteObject, RoundRect, SelectObject, SetBkMode, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use winapi::um::winuser::{
-    AdjustWindowRectEx, BeginPaint, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
-    DispatchMessageW, EndPaint, FillRect, GetClientRect, GetMessageW, GetSystemMetrics,
-    GetWindowLongPtrW, InvalidateRect, LoadCursorW, PostQuitMessage, RegisterClassW,
-    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TrackMouseEvent, TranslateMessage,
-    UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, MSG, PAINTSTRUCT,
-    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE, VK_RETURN, VK_SPACE,
-    WM_DESTROY,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
-    WNDCLASSW, WS_CAPTION, WS_OVERLAPPED, WS_SYSMENU,
+    BeginPaint, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW,
+    EndPaint, FillRect, FrameRect, GetClientRect, GetCursorPos, GetMessageW, GetMonitorInfoW,
+    GetWindowLongPtrW, InvalidateRect, LoadCursorW, MonitorFromPoint, PostQuitMessage,
+    RegisterClassW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TrackMouseEvent,
+    TranslateMessage, UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, MSG, PAINTSTRUCT, SW_SHOW, TME_LEAVE, TRACKMOUSEEVENT,
+    VK_ESCAPE, VK_RETURN, VK_SPACE, WA_INACTIVE, WM_ACTIVATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_LBUTTONUP, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WNDCLASSW, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::ui::gdi::{
-    self, ACCENT, BG, BLACK, DIM, DIM2, DT_GLYPH, DT_LINE, PANEL, TEXT,
+    self, ACCENT, BG, BLACK, BORDER, DIM, DIM2, DT_GLYPH, DT_LINE, PANEL, TEXT,
 };
 
 const PAD: i32 = 16;
@@ -34,6 +36,7 @@ const WIDTH: i32 = 380;
 const ROW_H: i32 = 46;
 const GAP: i32 = 8;
 const ICON: i32 = 24;
+const MARGIN: i32 = 8;
 
 pub struct MenuItem {
     pub label: String,
@@ -47,7 +50,7 @@ pub struct Menu {
     pub info: Vec<String>,
     pub items: Vec<MenuItem>,
     pub footer: String,
-    /// Index launched when the user presses Enter (the favourite/default).
+    /// Index launched on Enter/Space and anchored under the cursor (the default).
     pub default: Option<usize>,
 }
 
@@ -56,6 +59,7 @@ struct State {
     hovered: Option<usize>,
     result: Option<usize>,
     tracking: bool,
+    shown: bool,
     font_title: HFONT,
     font_body: HFONT,
     font_dim: HFONT,
@@ -117,24 +121,30 @@ pub fn run(menu: Menu) -> Option<usize> {
         }
         let has_icons = menu.items.iter().any(|it| it.icon.is_some());
 
-        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
-        let mut rc = RECT {
-            left: 0,
-            top: 0,
-            right: WIDTH,
-            bottom: client_h,
-        };
-        AdjustWindowRectEx(&mut rc, style, FALSE, 0);
-        let win_w = rc.right - rc.left;
-        let win_h = rc.bottom - rc.top;
-        let x = ((GetSystemMetrics(SM_CXSCREEN) - win_w) / 2).max(0);
-        let y = ((GetSystemMetrics(SM_CYSCREEN) - win_h) / 2).max(0);
+        // Anchor the favourite/default row (or the first row) under the cursor.
+        let anchor_row = menu.default.unwrap_or(0).min(menu.items.len().saturating_sub(1));
+        let anchor_y = item_rects[anchor_row].top + ROW_H / 2;
+
+        // Cursor position and its monitor's work area.
+        let mut pt: POINT = zeroed();
+        GetCursorPos(&mut pt);
+        let mut mi: MONITORINFO = zeroed();
+        mi.cbSize = size_of::<MONITORINFO>() as u32;
+        GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &mut mi);
+        let work = mi.rcWork;
+
+        // Centre horizontally on the cursor; put the anchor row under it; clamp.
+        let hi_left = (work.right - WIDTH - MARGIN).max(work.left + MARGIN);
+        let x = (pt.x - WIDTH / 2).max(work.left + MARGIN).min(hi_left);
+        let hi_top = (work.bottom - client_h - MARGIN).max(work.top + MARGIN);
+        let y = (pt.y - anchor_y).max(work.top + MARGIN).min(hi_top);
 
         let state = Box::new(State {
             menu,
             hovered: None,
             result: None,
             tracking: false,
+            shown: false,
             font_title: gdi::make_font(20, 600),
             font_body: gdi::make_font(16, 400),
             font_dim: gdi::make_font(13, 400),
@@ -145,14 +155,14 @@ pub fn run(menu: Menu) -> Option<usize> {
 
         let title_w = gdi::wide(crate::PRODUCT_NAME);
         let hwnd = CreateWindowExW(
-            0,
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             class_name.as_ptr(),
             title_w.as_ptr(),
-            style,
+            WS_POPUP,
             x,
             y,
-            win_w,
-            win_h,
+            WIDTH,
+            client_h,
             null_mut(),
             null_mut(),
             hinstance,
@@ -163,17 +173,10 @@ pub fn run(menu: Menu) -> Option<usize> {
             return None;
         }
 
-        let dark: BOOL = TRUE;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            20,
-            &dark as *const BOOL as *const c_void,
-            size_of::<BOOL>() as u32,
-        );
-
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
         SetForegroundWindow(hwnd);
+        (*state_ptr).shown = true;
 
         let mut msg: MSG = zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
@@ -207,9 +210,9 @@ unsafe fn paint(hwnd: HWND, state: &State) {
     let membmp = CreateCompatibleBitmap(hdc, w, h);
     let oldbmp = SelectObject(memdc, membmp as HGDIOBJ);
 
-    let bg = CreateSolidBrush(BG);
-    FillRect(memdc, &rc, bg);
-    DeleteObject(bg as HGDIOBJ);
+    let bgb = CreateSolidBrush(BG);
+    FillRect(memdc, &rc, bgb);
+    DeleteObject(bgb as HGDIOBJ);
     SetBkMode(memdc, TRANSPARENT as i32);
 
     let mut y = PAD;
@@ -278,6 +281,11 @@ unsafe fn paint(hwnd: HWND, state: &State) {
         gdi::draw_text(memdc, state.font_dim, DIM2, &state.menu.footer, &mut r, DT_LINE);
     }
 
+    // Thin border around the frameless popup.
+    let border = CreateSolidBrush(BORDER);
+    FrameRect(memdc, &rc, border);
+    DeleteObject(border as HGDIOBJ);
+
     BitBlt(hdc, 0, 0, w, h, memdc, 0, 0, SRCCOPY);
     SelectObject(memdc, oldbmp);
     DeleteObject(membmp as HGDIOBJ);
@@ -310,6 +318,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
         WM_ERASEBKGND => 1,
         WM_PAINT => {
             paint(hwnd, state);
+            0
+        }
+        WM_ACTIVATE => {
+            // Close when the popup loses focus (click-away), once fully shown.
+            if (wparam & 0xFFFF) == WA_INACTIVE as usize && state.shown {
+                DestroyWindow(hwnd);
+            }
             0
         }
         WM_MOUSEMOVE => {

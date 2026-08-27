@@ -21,7 +21,11 @@ in native Rust, not Electron.
   sessions and VMs where GPU toolkits fail.
 - **Icons, custom order, and a favourite.** The picker shows each browser's icon.
   Open the app to reorder browsers and star a favourite/default: the picker then
-  lists them in your order, badges the favourite, and opens it on Enter.
+  lists them in your order, badges the favourite, and opens it on Enter or Space.
+- **Pops up at your cursor.** The picker opens under the mouse with the favourite
+  under the pointer, so double-clicking a link opens it in your default browser.
+  It clamps to the monitor's work area, so clicks near a screen edge slide it
+  on-screen rather than overflowing.
 - **Brings the browser to the front.** Grants foreground rights to the browser it
   launches, so the link opens on top instead of behind other windows.
 - **No background process.** Nothing sits in the tray. The exe only runs for the

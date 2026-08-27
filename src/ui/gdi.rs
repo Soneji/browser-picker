@@ -30,6 +30,7 @@ pub const TEXT: u32 = rgb(0xea, 0xea, 0xea);
 pub const DIM: u32 = rgb(0xaa, 0xaa, 0xaa);
 pub const DIM2: u32 = rgb(0x80, 0x80, 0x80);
 pub const BLACK: u32 = rgb(0, 0, 0);
+pub const BORDER: u32 = rgb(0x55, 0x55, 0x55);
 
 /// A left-aligned, vertically-centred single line with ellipsis.
 pub const DT_LINE: u32 = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
