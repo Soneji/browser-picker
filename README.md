@@ -86,10 +86,14 @@ Picker itself. Browsers are launched as `exe <url>`.
 
 ## Notes
 
-- The UI uses egui (GPU-rendered via OpenGL/glow). The binary is a few MB — larger
-  than a bare Win32 app, but there is still **no background process** and it's
-  ~25× smaller than an Electron equivalent. If you want to reclaim the kilobytes,
-  a hand-drawn Direct2D UI is a possible future path.
+- The UI uses egui, rendered with **wgpu (DirectX 12 on Windows, with a software
+  fallback)** — chosen over OpenGL because OpenGL init fails on many RDP sessions,
+  VMs and older drivers. The binary is ~6 MB: larger than a bare Win32 app, but
+  there is still **no background process** and it's ~25× smaller than an Electron
+  equivalent. A hand-drawn Direct2D/GDI UI (no GPU, ~300 KB) is a possible future
+  path if you want the kilobytes back.
+- If the app ever fails to start, it shows the exact error in a dialog and writes
+  `%TEMP%\browser-picker-crash.log` — send that along.
 - DPI is handled by the windowing layer (per-monitor aware), so the UI is crisp on
   high-DPI displays.
 
