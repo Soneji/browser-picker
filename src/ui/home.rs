@@ -1,143 +1,131 @@
-//! The home / settings window shown when the app is opened directly (no URL).
+//! Home / settings window shown when the app is opened directly (egui / eframe).
 
 use crate::{browsers, register};
 
+struct HomeApp {
+    browsers: Vec<browsers::Browser>,
+    status: String,
+}
+
 pub fn show() {
-    nwg::init().expect("Failed to init Native Windows GUI");
-
     let me = std::env::current_exe().ok();
-    let list = browsers::detect(me.as_deref());
-
-    let mut font = nwg::Font::default();
-    let _ = nwg::Font::builder().size(16).family("Segoe UI").build(&mut font);
-
-    let width = 440i32;
-    let height = 420i32;
-    let (x, y) = crate::ui::centered_position(width, height);
-
-    let mut window = nwg::Window::default();
-    nwg::Window::builder()
-        .size((width, height))
-        .position((x, y))
-        .title(crate::PRODUCT_NAME)
-        .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-        .build(&mut window)
-        .expect("Failed to build window");
-
+    let browsers = browsers::detect(me.as_deref());
     let status = if register::is_registered() {
-        format!(
-            "{} is registered.\nSet it as default in Settings ▸ Apps ▸ Default apps.",
-            crate::PRODUCT_NAME
-        )
+        "Registered. Set it as default in Settings ▸ Apps ▸ Default apps.".to_string()
     } else {
-        format!(
-            "{} is not registered yet — click \"Set as default browser\".",
-            crate::PRODUCT_NAME
-        )
+        "Not registered yet — click \u{201C}Set as default browser\u{201D}.".to_string()
     };
 
-    let mut status_label = nwg::Label::default();
-    nwg::Label::builder()
-        .text(&status)
-        .parent(&window)
-        .font(Some(&font))
-        .position((14, 12))
-        .size((width - 28, 44))
-        .build(&mut status_label)
-        .expect("Failed to build label");
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([440.0, 470.0])
+            .with_resizable(false)
+            .with_title(crate::PRODUCT_NAME),
+        centered: true,
+        ..Default::default()
+    };
 
-    let items: Vec<String> = if list.is_empty() {
-        vec!["No browsers detected".to_string()]
-    } else {
-        list.iter()
+    let app = HomeApp { browsers, status };
+    let _ = eframe::run_native(
+        crate::PRODUCT_NAME,
+        options,
+        Box::new(|cc| {
+            crate::ui::apply_theme(&cc.egui_ctx);
+            Ok(Box::new(app))
+        }),
+    );
+}
+
+impl eframe::App for HomeApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.106, 0.106, 0.106, 1.0]
+    }
+
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let count = self.browsers.len();
+        let items: Vec<String> = self
+            .browsers
+            .iter()
             .enumerate()
             .map(|(i, b)| format!("{}.   {}", i + 1, b.name))
-            .collect()
-    };
-    let mut listbox: nwg::ListBox<String> = nwg::ListBox::default();
-    nwg::ListBox::builder()
-        .collection(items)
-        .parent(&window)
-        .font(Some(&font))
-        .position((14, 64))
-        .size((width - 28, 190))
-        .build(&mut listbox)
-        .expect("Failed to build list box");
+            .collect();
+        let status = self.status.clone();
 
-    let mut set_btn = nwg::Button::default();
-    nwg::Button::builder()
-        .text("Set as default browser")
-        .parent(&window)
-        .font(Some(&font))
-        .position((14, 268))
-        .size((width - 28, 44))
-        .build(&mut set_btn)
-        .expect("Failed to build button");
+        let mut do_set = false;
+        let mut do_reg = false;
+        let mut do_unreg = false;
 
-    let half = (width - 28 - 8) / 2;
-    let mut reg_btn = nwg::Button::default();
-    nwg::Button::builder()
-        .text("Register")
-        .parent(&window)
-        .font(Some(&font))
-        .position((14, 320))
-        .size((half, 36))
-        .build(&mut reg_btn)
-        .expect("Failed to build button");
-    let mut unreg_btn = nwg::Button::default();
-    nwg::Button::builder()
-        .text("Unregister")
-        .parent(&window)
-        .font(Some(&font))
-        .position((14 + half + 8, 320))
-        .size((half, 36))
-        .build(&mut unreg_btn)
-        .expect("Failed to build button");
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(6.0);
+            ui.heading(crate::PRODUCT_NAME);
+            ui.add_space(4.0);
+            ui.colored_label(egui::Color32::from_gray(160), status.as_str());
+            ui.add_space(14.0);
 
-    let set_h = set_btn.handle;
-    let reg_h = reg_btn.handle;
-    let unreg_h = unreg_btn.handle;
-
-    let handler =
-        nwg::full_bind_event_handler(&window.handle, move |evt, _evt_data, handle| match evt {
-            nwg::Event::OnButtonClick => {
-                if handle == set_h {
-                    match register::register() {
-                        Ok(_) => {
-                            open_default_apps();
-                            nwg::simple_message(
-                                crate::PRODUCT_NAME,
-                                "Opened Windows Default Apps.\n\nFind \"Browser Picker\" in the \
-                                 list and set it for HTTP and HTTPS.",
-                            );
-                        }
-                        Err(e) => {
-                            nwg::simple_message(
-                                crate::PRODUCT_NAME,
-                                &format!("Registration failed:\n{e}"),
-                            );
+            ui.label(format!("Detected browsers ({count}):"));
+            ui.add_space(4.0);
+            egui::Frame::none()
+                .fill(egui::Color32::from_rgb(0x24, 0x24, 0x24))
+                .rounding(egui::Rounding::same(8.0))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    if items.is_empty() {
+                        ui.label("None detected.");
+                    } else {
+                        for it in &items {
+                            ui.label(it.as_str());
                         }
                     }
-                } else if handle == reg_h {
-                    match register::register() {
-                        Ok(_) => {
-                            nwg::simple_message(crate::PRODUCT_NAME, "Registered.");
-                        }
-                        Err(e) => {
-                            nwg::simple_message(crate::PRODUCT_NAME, &format!("Failed:\n{e}"));
-                        }
-                    }
-                } else if handle == unreg_h {
-                    let _ = register::unregister();
-                    nwg::simple_message(crate::PRODUCT_NAME, "Unregistered.");
-                }
+                });
+
+            ui.add_space(16.0);
+            if ui
+                .add_sized(
+                    [ui.available_width(), 44.0],
+                    egui::Button::new("Set as default browser"),
+                )
+                .clicked()
+            {
+                do_set = true;
             }
-            nwg::Event::OnWindowClose => nwg::stop_thread_dispatch(),
-            _ => {}
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let half = (ui.available_width() - 8.0) / 2.0;
+                if ui
+                    .add_sized([half, 36.0], egui::Button::new("Register"))
+                    .clicked()
+                {
+                    do_reg = true;
+                }
+                if ui
+                    .add_sized([half, 36.0], egui::Button::new("Unregister"))
+                    .clicked()
+                {
+                    do_unreg = true;
+                }
+            });
         });
 
-    nwg::dispatch_thread_events();
-    nwg::unbind_event_handler(&handler);
+        if do_set {
+            match register::register() {
+                Ok(_) => {
+                    open_default_apps();
+                    self.status =
+                        "Opened Default Apps — choose Browser Picker for HTTP and HTTPS.".into();
+                }
+                Err(e) => self.status = format!("Registration failed: {e}"),
+            }
+        } else if do_reg {
+            self.status = match register::register() {
+                Ok(_) => "Registered.".into(),
+                Err(e) => format!("Failed: {e}"),
+            };
+        } else if do_unreg {
+            let _ = register::unregister();
+            self.status = "Unregistered.".into();
+        }
+    }
 }
 
 fn open_default_apps() {

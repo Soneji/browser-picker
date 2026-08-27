@@ -142,5 +142,12 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// single argument, which avoids fragile re-quoting of the registry command
 /// template (e.g. Chrome/Edge/Firefox/Brave/Opera/Vivaldi all handle `exe <url>`).
 pub fn launch(browser: &Browser, url: &str) -> std::io::Result<()> {
+    // The picker window currently owns the foreground; grant that right to the
+    // browser we're about to launch (or its already-running instance) so its
+    // window comes to the front instead of opening behind other windows.
+    unsafe {
+        // ASFW_ANY = (DWORD)-1 : permit any process to set the foreground window.
+        winapi::um::winuser::AllowSetForegroundWindow(u32::MAX);
+    }
     Command::new(&browser.exe).arg(url).spawn().map(|_| ())
 }

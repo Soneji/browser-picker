@@ -3,8 +3,8 @@
 //!
 //! When set as the default browser, Windows launches this exe with the clicked
 //! URL as its argument. We detect every installed browser from the registry and
-//! show a small native window to pick one. There is no background process and no
-//! webview — the exe only runs while you're choosing, then exits.
+//! show a small, modern window (egui) to pick one. There is no background
+//! process — the exe only runs while you're choosing, then exits.
 
 mod browsers;
 mod register;
@@ -26,11 +26,23 @@ Usage:\n\
   browser-picker.exe --list         List the browsers that were detected\n\
   browser-picker.exe --help         Show this help";
 
-/// Show a short native message box (used for the CLI-style flags, since this is
-/// a GUI-subsystem app with no console of its own).
-fn msg(text: &str) {
-    let _ = nwg::init();
-    nwg::simple_message(PRODUCT_NAME, text);
+/// Native message box for the CLI-style flags (GUI-subsystem app: no console).
+pub fn msg(text: &str) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+    let body = wide(text);
+    let title = wide(PRODUCT_NAME);
+    unsafe {
+        winapi::um::winuser::MessageBoxW(
+            std::ptr::null_mut(),
+            body.as_ptr(),
+            title.as_ptr(),
+            winapi::um::winuser::MB_OK,
+        );
+    }
 }
 
 fn list_text() -> String {
@@ -66,7 +78,7 @@ fn main() {
         Some("--register") => match register::register() {
             Ok(_) => msg(&format!(
                 "{} is now registered.\n\nOpen Settings ▸ Apps ▸ Default apps, find \"{}\", \
-                 and set it for HTTP and HTTPS. Every link will then let you choose a browser.",
+                 and set it for HTTP and HTTPS.",
                 PRODUCT_NAME, PRODUCT_NAME
             )),
             Err(e) => msg(&format!("Registration failed:\n{e}")),
@@ -77,7 +89,6 @@ fn main() {
         }
         Some("--list") => msg(&list_text()),
         Some("--help") | Some("-h") => msg(HELP),
-        // Any other flag, or none: route on whether a URL was supplied.
         Some(_) | None => match url {
             Some(u) => ui::picker::show(u),
             None => ui::home::show(),

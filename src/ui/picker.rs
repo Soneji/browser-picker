@@ -1,112 +1,119 @@
-//! The picker window shown when a link is clicked.
+//! The picker window shown when a link is clicked (egui / eframe).
 
-use std::rc::Rc;
+use crate::browsers::{self, Browser};
 
-use crate::browsers::{self};
+struct PickerApp {
+    url: String,
+    browsers: Vec<Browser>,
+}
 
 pub fn show(url: String) {
-    nwg::init().expect("Failed to init Native Windows GUI");
-
     let me = std::env::current_exe().ok();
-    let list = browsers::detect(me.as_deref());
-
-    if list.is_empty() {
-        nwg::simple_message(
-            crate::PRODUCT_NAME,
-            "No browsers were detected on this system.",
-        );
+    let browsers = browsers::detect(me.as_deref());
+    if browsers.is_empty() {
+        crate::msg("No browsers were detected on this system.");
         return;
     }
 
-    let mut font = nwg::Font::default();
-    let _ = nwg::Font::builder().size(16).family("Segoe UI").build(&mut font);
+    let rows = browsers.len().min(12) as f32;
+    let width = 380.0_f32;
+    let height = 104.0 + rows * 50.0 + 30.0;
 
-    // Layout (client-area coordinates).
-    let pad = 12i32;
-    let btn_h = 40i32;
-    let gap = 6i32;
-    let btn_w = 340i32;
-    let footer_h = 22i32;
-    let count = list.len() as i32;
-    let width = btn_w + pad * 2;
-    // Extra height leaves room for the title bar (outer vs client) so nothing clips.
-    let height = pad + count * (btn_h + gap) + footer_h + pad + 56;
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([width, height])
+            .with_resizable(false)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop)
+            .with_title(crate::PRODUCT_NAME),
+        centered: true,
+        ..Default::default()
+    };
 
-    let (x, y) = crate::ui::centered_position(width, height);
+    let app = PickerApp { url, browsers };
+    let _ = eframe::run_native(
+        crate::PRODUCT_NAME,
+        options,
+        Box::new(|cc| {
+            crate::ui::apply_theme(&cc.egui_ctx);
+            Ok(Box::new(app))
+        }),
+    );
+}
 
-    let mut window = nwg::Window::default();
-    nwg::Window::builder()
-        .size((width, height))
-        .position((x, y))
-        .title("Open link in…")
-        .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-        .build(&mut window)
-        .expect("Failed to build window");
-
-    let mut buttons: Vec<nwg::Button> = Vec::with_capacity(list.len());
-    for (i, b) in list.iter().enumerate() {
-        // "&1" makes Alt+1 an accelerator that clicks the button.
-        let label = if i < 9 {
-            format!("&{}   {}", i + 1, b.name)
-        } else {
-            b.name.clone()
-        };
-        let mut btn = nwg::Button::default();
-        nwg::Button::builder()
-            .text(&label)
-            .parent(&window)
-            .font(Some(&font))
-            .position((pad, pad + i as i32 * (btn_h + gap)))
-            .size((btn_w, btn_h))
-            .build(&mut btn)
-            .expect("Failed to build button");
-        buttons.push(btn);
+impl eframe::App for PickerApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.106, 0.106, 0.106, 1.0]
     }
 
-    let mut footer = nwg::Label::default();
-    let _ = nwg::Label::builder()
-        .text(&format!(
-            "{count} browser(s)  ·  Alt+number to pick  ·  Esc or ✕ to cancel"
-        ))
-        .parent(&window)
-        .font(Some(&font))
-        .position((pad, pad + count * (btn_h + gap)))
-        .size((btn_w, footer_h))
-        .build(&mut footer);
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut launch_idx: Option<usize> = None;
+        let mut cancel = false;
 
-    let list_rc = Rc::new(list);
-    let buttons_rc = Rc::new(buttons);
-    let url_rc = Rc::new(url);
-
-    let handler = nwg::full_bind_event_handler(&window.handle, move |evt, evt_data, handle| {
-        match evt {
-            nwg::Event::OnButtonClick => {
-                for (i, btn) in buttons_rc.iter().enumerate() {
-                    if handle == btn.handle {
-                        if let Err(e) = browsers::launch(&list_rc[i], &url_rc) {
-                            nwg::simple_message(
-                                crate::PRODUCT_NAME,
-                                &format!("Couldn't launch {}:\n{e}", list_rc[i].name),
-                            );
-                        }
-                        nwg::stop_thread_dispatch();
-                        break;
-                    }
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Escape) {
+                cancel = true;
+            }
+            const NUM: [egui::Key; 9] = [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ];
+            for (n, k) in NUM.iter().enumerate() {
+                if n < self.browsers.len() && i.key_pressed(*k) {
+                    launch_idx = Some(n);
                 }
             }
-            nwg::Event::OnKeyPress => {
-                if let nwg::EventData::OnKey(key) = evt_data {
-                    if key == 0x1B {
-                        // VK_ESCAPE
-                        nwg::stop_thread_dispatch();
-                    }
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(6.0);
+            ui.heading("Open link in…");
+            ui.add_space(2.0);
+            ui.colored_label(egui::Color32::from_gray(150), truncate(&self.url, 56));
+            ui.add_space(12.0);
+
+            for (n, b) in self.browsers.iter().enumerate() {
+                let text = if n < 9 {
+                    format!("  {}      {}", n + 1, b.name)
+                } else {
+                    format!("         {}", b.name)
+                };
+                let resp = ui.add_sized([ui.available_width(), 44.0], egui::Button::new(text));
+                if resp.clicked() {
+                    launch_idx = Some(n);
                 }
+                ui.add_space(6.0);
             }
-            nwg::Event::OnWindowClose => nwg::stop_thread_dispatch(),
-            _ => {}
+
+            ui.add_space(2.0);
+            ui.colored_label(
+                egui::Color32::from_gray(120),
+                "1–9 to pick   ·   Esc to cancel",
+            );
+        });
+
+        if cancel {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
         }
-    });
+        if let Some(n) = launch_idx {
+            let _ = browsers::launch(&self.browsers[n], &self.url);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+}
 
-    nwg::dispatch_thread_events();
-    nwg::unbind_event_handler(&handler);
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let t: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{t}…")
+    }
 }
