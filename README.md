@@ -26,6 +26,9 @@ in native Rust, not Electron.
   under the pointer, so double-clicking a link opens it in your default browser.
   It clamps to the monitor's work area, so clicks near a screen edge slide it
   on-screen rather than overflowing.
+- **Number and letter hotkeys.** Each browser gets a number (1–9) and an
+  auto-assigned letter (G for Chrome, F for Firefox, E for Edge…). If two share a
+  first letter, the second is left blank. Override any letter in settings.
 - **Brings the browser to the front.** Grants foreground rights to the browser it
   launches, so the link opens on top instead of behind other windows.
 - **No background process.** Nothing sits in the tray. The exe only runs for the
@@ -61,12 +64,14 @@ browser-picker.exe --list         List the browsers that were detected
 browser-picker.exe --help         Show help
 ```
 
-In the picker: click a browser, press **1–9**, press **Enter** for your
-favourite/default, or **Esc** to cancel.
+In the picker: click a browser, press its **number (1–9)** or **letter** (shown
+on the right of each row), press **Enter**/**Space** for your favourite/default,
+or **Esc** to cancel.
 
 Run `browser-picker.exe` with no URL for **settings**: **★** sets the
-favourite/default, **▲ ▼** reorder, and the buttons register / set-default.
-Order and favourite save instantly (to `HKCU\Software\BrowserPicker`).
+favourite/default, **▲ ▼** reorder, and the **letter box** assigns a shortcut
+(click it, then press a key; Del clears back to auto). The buttons register /
+set-default. Everything saves instantly (to `HKCU\Software\BrowserPicker`).
 
 ## Build from source
 

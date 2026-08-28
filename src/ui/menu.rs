@@ -28,7 +28,7 @@ use winapi::um::winuser::{
 };
 
 use crate::ui::gdi::{
-    self, ACCENT, BG, BLACK, BORDER, DIM, DIM2, DT_GLYPH, DT_LINE, PANEL, TEXT,
+    self, ACCENT, BG, BLACK, BORDER, DIM, DIM2, DT_LINE, DT_RLINE, PANEL, TEXT,
 };
 
 const PAD: i32 = 16;
@@ -42,6 +42,7 @@ pub struct MenuItem {
     pub label: String,
     pub icon: Option<HICON>,
     pub favorite: bool,
+    pub letter: Option<char>,
 }
 
 pub struct Menu {
@@ -254,20 +255,31 @@ unsafe fn paint(hwnd: HWND, state: &State) {
         let mut tr = RECT {
             left: r.left + text_left_off,
             top: r.top,
-            right: r.right - 36,
+            right: r.right - 78,
             bottom: r.bottom,
         };
         gdi::draw_text(memdc, state.font_body, color, &it.label, &mut tr, DT_LINE);
 
+        // Right-aligned hint: shortcut letter and/or favourite star.
+        let mut hint = String::new();
+        if let Some(c) = it.letter {
+            hint.push(c);
+        }
         if it.favorite {
-            let mut sr = RECT {
-                left: r.right - 34,
+            if !hint.is_empty() {
+                hint.push_str("  ");
+            }
+            hint.push('★');
+        }
+        if !hint.is_empty() {
+            let mut hr = RECT {
+                left: r.right - 74,
                 top: r.top,
-                right: r.right - 8,
+                right: r.right - 12,
                 bottom: r.bottom,
             };
-            let scol = if hovered { BLACK } else { ACCENT };
-            gdi::draw_text(memdc, state.font_body, scol, "★", &mut sr, DT_GLYPH);
+            let hcol = if hovered { BLACK } else { ACCENT };
+            gdi::draw_text(memdc, state.font_body, hcol, &hint, &mut hr, DT_RLINE);
         }
     }
 
@@ -372,15 +384,22 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                     DestroyWindow(hwnd);
                 }
             } else {
-                let idx = if (0x31..=0x39).contains(&vk) {
+                let num_idx = if (0x31..=0x39).contains(&vk) {
                     Some((vk - 0x31) as usize)
                 } else if (0x61..=0x69).contains(&vk) {
                     Some((vk - 0x61) as usize)
                 } else {
                     None
                 };
-                if let Some(i) = idx {
+                if let Some(i) = num_idx {
                     if i < state.menu.items.len() {
+                        state.result = Some(i);
+                        DestroyWindow(hwnd);
+                    }
+                } else if (0x41..=0x5A).contains(&vk) {
+                    // Letter hotkey (A-Z). VK code equals the uppercase ASCII.
+                    let ch = (vk as u8) as char;
+                    if let Some(i) = state.menu.items.iter().position(|it| it.letter == Some(ch)) {
                         state.result = Some(i);
                         DestroyWindow(hwnd);
                     }

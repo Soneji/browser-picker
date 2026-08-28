@@ -1,6 +1,8 @@
-//! The settings/home window (GPU-free GDI). Lets the user reorder browsers,
-//! pick a favourite/default, and register the app. Changes persist immediately.
+//! The settings/home window (GPU-free GDI). Reorder browsers, pick a
+//! favourite/default, assign shortcut letters, and register the app. Changes
+//! persist immediately.
 
+use std::collections::HashMap;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
@@ -18,10 +20,10 @@ use winapi::um::winuser::{
     DispatchMessageW, EndPaint, FillRect, GetClientRect, GetMessageW, GetSystemMetrics,
     GetWindowLongPtrW, InvalidateRect, LoadCursorW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TrackMouseEvent, TranslateMessage,
-    UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, MSG, PAINTSTRUCT,
-    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE, WM_DESTROY,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
-    WNDCLASSW, WS_CAPTION, WS_OVERLAPPED, WS_SYSMENU,
+    UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
+    MSG, PAINTSTRUCT, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, TME_LEAVE, TRACKMOUSEEVENT, VK_BACK,
+    VK_DELETE, VK_ESCAPE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSELEAVE,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WNDCLASSW, WS_CAPTION, WS_OVERLAPPED, WS_SYSMENU,
 };
 
 use crate::browsers::Browser;
@@ -32,7 +34,7 @@ use crate::ui::gdi::{
 };
 
 const PAD: i32 = 16;
-const WIDTH: i32 = 460;
+const WIDTH: i32 = 500;
 const ROW_H: i32 = 40;
 const GAP: i32 = 6;
 const BSZ: i32 = 30;
@@ -44,6 +46,7 @@ const ACTIONS: [&str; 3] = ["Set as default browser", "Register", "Unregister"];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Region {
+    Letter(usize),
     Star(usize),
     Up(usize),
     Down(usize),
@@ -51,6 +54,7 @@ enum Region {
 }
 
 struct RowRects {
+    letter: RECT,
     star: RECT,
     up: RECT,
     down: RECT,
@@ -60,6 +64,8 @@ struct State {
     browsers: Vec<Browser>,
     icons: Vec<Option<HICON>>,
     favorite: Option<String>,
+    configured: HashMap<String, char>,
+    capturing: Option<usize>,
     status: String,
     registered: bool,
     hovered: Option<Region>,
@@ -76,7 +82,7 @@ struct State {
 impl State {
     fn save(&self) {
         let order: Vec<String> = self.browsers.iter().map(|b| b.id()).collect();
-        config::save(&order, self.favorite.as_deref());
+        config::save(&order, self.favorite.as_deref(), &self.configured);
     }
 }
 
@@ -101,7 +107,8 @@ pub fn run() {
         let list = crate::browsers::detect(me.as_deref());
         let settings = config::load();
         let (browsers, _) = config::apply(list, &settings);
-        let icons: Vec<Option<HICON>> = browsers.iter().map(|b| gdi::extract_icon(&b.exe)).collect();
+        let icons: Vec<Option<HICON>> =
+            browsers.iter().map(|b| gdi::extract_icon(&b.exe)).collect();
         let registered = register::is_registered();
 
         let hinstance = GetModuleHandleW(null());
@@ -114,7 +121,6 @@ pub fn run() {
         wc.lpszClassName = class_name.as_ptr();
         RegisterClassW(&wc);
 
-        // Layout.
         let rows_top = PAD + 30 + 22 + 10;
         let n = browsers.len() as i32;
         let rows_block = if n > 0 { n * ROW_H + (n - 1) * GAP } else { 0 };
@@ -131,7 +137,13 @@ pub fn run() {
             let down = rect(right - BSZ, by, right, by + BSZ);
             let up = rect(down.left - GAP - BSZ, by, down.left - GAP, by + BSZ);
             let star = rect(up.left - GAP - BSZ, by, up.left - GAP, by + BSZ);
-            rows.push(RowRects { star, up, down });
+            let letter = rect(star.left - GAP - BSZ, by, star.left - GAP, by + BSZ);
+            rows.push(RowRects {
+                letter,
+                star,
+                up,
+                down,
+            });
         }
         let mut actions = [zeroed::<RECT>(); 3];
         for (k, a) in actions.iter_mut().enumerate() {
@@ -156,6 +168,8 @@ pub fn run() {
             browsers,
             icons,
             favorite: settings.favorite,
+            configured: settings.letters,
+            capturing: None,
             status,
             registered,
             hovered: None,
@@ -227,6 +241,9 @@ fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
 
 fn hit_test(state: &State, x: i32, y: i32) -> Option<Region> {
     for (i, rr) in state.rows.iter().enumerate() {
+        if in_rect(&rr.letter, x, y) {
+            return Some(Region::Letter(i));
+        }
         if in_rect(&rr.star, x, y) {
             return Some(Region::Star(i));
         }
@@ -297,6 +314,8 @@ unsafe fn perform(state: &mut State, region: Region) {
             state.registered = false;
             state.status = "Unregistered.".to_string();
         }
+        // Letter capture is handled in WM_LBUTTONUP, not here.
+        Region::Letter(_) => {}
     }
 }
 
@@ -312,7 +331,14 @@ unsafe fn fill_round(hdc: winapi::shared::windef::HDC, r: &RECT, color: u32, rad
     DeleteObject(pen as HGDIOBJ);
 }
 
-unsafe fn button(state: &State, hdc: winapi::shared::windef::HDC, r: &RECT, glyph: &str, active: bool, hovered: bool) {
+unsafe fn button(
+    state: &State,
+    hdc: winapi::shared::windef::HDC,
+    r: &RECT,
+    glyph: &str,
+    active: bool,
+    hovered: bool,
+) {
     let bg = if active || hovered { ACCENT } else { PANEL2 };
     fill_round(hdc, r, bg, 8);
     let col = if active || hovered { BLACK } else { TEXT };
@@ -332,9 +358,9 @@ unsafe fn paint(hwnd: HWND, state: &State) {
     let membmp = CreateCompatibleBitmap(hdc, w, h);
     let oldbmp = SelectObject(memdc, membmp as HGDIOBJ);
 
-    let bg = CreateSolidBrush(BG);
-    FillRect(memdc, &rc, bg);
-    DeleteObject(bg as HGDIOBJ);
+    let bgb = CreateSolidBrush(BG);
+    FillRect(memdc, &rc, bgb);
+    DeleteObject(bgb as HGDIOBJ);
     SetBkMode(memdc, TRANSPARENT as i32);
 
     let mut tr = rect(PAD, PAD, w - PAD, PAD + 30);
@@ -344,12 +370,13 @@ unsafe fn paint(hwnd: HWND, state: &State) {
         memdc,
         state.font_dim,
         DIM,
-        "★ favourite / default   ·   ▲ ▼ reorder",
+        "letter: click the box, press a key (Del clears)   ·   ★ default   ·   ▲ ▼ reorder",
         &mut ir,
         DT_LINE,
     );
 
-    // Browser rows.
+    let letters = config::effective_letters(&state.browsers, &state.configured);
+
     for (i, b) in state.browsers.iter().enumerate() {
         let rr = &state.rows[i];
         let top = state.rows_top + i as i32 * (ROW_H + GAP);
@@ -359,8 +386,24 @@ unsafe fn paint(hwnd: HWND, state: &State) {
         if let Some(Some(ic)) = state.icons.get(i) {
             gdi::draw_icon(memdc, row.left + 10, top + (ROW_H - ICON) / 2, ICON, *ic);
         }
-        let mut nr = rect(row.left + 44, top, rr.star.left - 10, top + ROW_H);
+        let mut nr = rect(row.left + 44, top, rr.letter.left - 10, top + ROW_H);
         gdi::draw_text(memdc, state.font_body, TEXT, &b.name, &mut nr, DT_LINE);
+
+        // Letter box.
+        let capturing = state.capturing == Some(i);
+        let glyph = if capturing {
+            "?".to_string()
+        } else {
+            letters[i].map(|c| c.to_string()).unwrap_or_else(|| "·".to_string())
+        };
+        button(
+            state,
+            memdc,
+            &rr.letter,
+            &glyph,
+            capturing,
+            state.hovered == Some(Region::Letter(i)),
+        );
 
         let is_fav = state.favorite.as_deref() == Some(b.id().as_str());
         button(
@@ -375,7 +418,6 @@ unsafe fn paint(hwnd: HWND, state: &State) {
         button(state, memdc, &rr.down, "▼", false, state.hovered == Some(Region::Down(i)));
     }
 
-    // Action buttons.
     for (k, a) in state.actions.iter().enumerate() {
         let hovered = state.hovered == Some(Region::Action(k));
         fill_round(memdc, a, if hovered { ACCENT } else { PANEL }, 12);
@@ -384,7 +426,6 @@ unsafe fn paint(hwnd: HWND, state: &State) {
         gdi::draw_text(memdc, state.font_body, col, ACTIONS[k], &mut lr, DT_LINE);
     }
 
-    // Status line.
     let mut sr = rect(PAD, h - PAD - 20, w - PAD, h - PAD);
     gdi::draw_text(memdc, state.font_dim, DIM2, &state.status, &mut sr, DT_LINE);
 
@@ -442,15 +483,43 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
         WM_LBUTTONUP => {
             let x = (lparam & 0xFFFF) as i16 as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
-            if let Some(region) = hit_test(state, x, y) {
-                perform(state, region);
-                state.hovered = hit_test(state, x, y);
-                InvalidateRect(hwnd, null(), FALSE);
+            match hit_test(state, x, y) {
+                Some(Region::Letter(i)) => {
+                    state.capturing = if state.capturing == Some(i) { None } else { Some(i) };
+                }
+                Some(other) => {
+                    state.capturing = None;
+                    perform(state, other);
+                }
+                None => state.capturing = None,
             }
+            state.hovered = hit_test(state, x, y);
+            InvalidateRect(hwnd, null(), FALSE);
             0
         }
         WM_KEYDOWN => {
-            if wparam as i32 == VK_ESCAPE {
+            let vk = wparam as i32;
+            if let Some(i) = state.capturing {
+                if (0x41..=0x5A).contains(&vk) {
+                    let c = (vk as u8) as char;
+                    let id = state.browsers[i].id();
+                    // Keep configured letters unique: drop this letter elsewhere.
+                    state.configured.retain(|_, v| *v != c);
+                    state.configured.insert(id, c);
+                    state.capturing = None;
+                    state.save();
+                    InvalidateRect(hwnd, null(), FALSE);
+                } else if vk == VK_BACK || vk == VK_DELETE {
+                    let id = state.browsers[i].id();
+                    state.configured.remove(&id);
+                    state.capturing = None;
+                    state.save();
+                    InvalidateRect(hwnd, null(), FALSE);
+                } else if vk == VK_ESCAPE {
+                    state.capturing = None;
+                    InvalidateRect(hwnd, null(), FALSE);
+                }
+            } else if vk == VK_ESCAPE {
                 DestroyWindow(hwnd);
             }
             0

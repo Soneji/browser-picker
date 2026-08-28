@@ -11,7 +11,7 @@ use winapi::um::wingdi::{
 };
 use winapi::um::winuser::{
     DestroyIcon, DrawIconEx, DrawTextW, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER,
+    DT_RIGHT, DT_SINGLELINE, DT_VCENTER,
 };
 
 /// DrawIconEx flag (DI_IMAGE | DI_MASK); winapi 0.3 doesn't export it.
@@ -36,6 +36,8 @@ pub const BORDER: u32 = rgb(0x55, 0x55, 0x55);
 pub const DT_LINE: u32 = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
 /// A centred single line (for glyph buttons).
 pub const DT_GLYPH: u32 = DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX;
+/// A right-aligned single line (for the picker's letter/star hint).
+pub const DT_RLINE: u32 = DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX;
 
 pub fn wide(s: &str) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;

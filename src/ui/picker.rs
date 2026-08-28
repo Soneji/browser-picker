@@ -15,6 +15,7 @@ pub fn show(url: String) {
 
     let settings = config::load();
     let (list, fav_idx) = config::apply(list, &settings);
+    let letters = config::effective_letters(&list, &settings.letters);
 
     let items: Vec<MenuItem> = list
         .iter()
@@ -30,14 +31,15 @@ pub fn show(url: String) {
                 label,
                 icon,
                 favorite: Some(i) == fav_idx,
+                letter: letters[i],
             }
         })
         .collect();
 
     let footer = if fav_idx.is_some() {
-        "Enter / Space = default   ·   1–9 to pick   ·   Esc".to_string()
+        "Enter/Space = default   ·   number or letter to pick   ·   Esc".to_string()
     } else {
-        "1–9 to pick   ·   Esc to cancel".to_string()
+        "number or letter to pick   ·   Esc to cancel".to_string()
     };
 
     let menu = Menu {
